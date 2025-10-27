@@ -243,6 +243,8 @@ def extras(
                 wandb_status = "new"
                 runs_in_group = get_existing_wandb_group_runs(config, ckpt_must_exist=True, only_best_and_last=False)
                 for other_run in runs_in_group:
+                    if not hasattr(other_run.config, "get"):
+                        continue
                     other_seed = other_run.config.get("seed")
                     if "," in str(other_seed):
                         # wrong seed has been logged, use the one from the name
