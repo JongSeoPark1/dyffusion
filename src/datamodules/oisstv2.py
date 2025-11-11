@@ -43,7 +43,16 @@ class OISSTv2DataModule(BaseDataModule):
         validation_boxes: Union[List, str] = "all",
         predict_boxes: Union[List, str] = "all",
         predict_slice: Optional[slice] = slice("2020-12-01", "2020-12-31"),
-        train_start_date: str | int = None,
+        
+        # --- 수정된 부분: 연도 기반 설정 ---
+        train_start_year: int = 1981,
+        train_end_year: int = 2018,
+        val_start_year: int = 2019,
+        val_end_year: int = 2019,
+        test_start_year: int = 2020,
+        test_end_year: int = 2020,
+        # ------------------------------------
+
         box_size: int = 60,
         window: int = 1,
         horizon: int = 1,
@@ -53,6 +62,50 @@ class OISSTv2DataModule(BaseDataModule):
         save_and_load_as_numpy: bool = False,
         **kwargs,
     ):
+        raise_error_if_invalid_type(data_dir, possible_types=[str], name="data_dir")
+        raise_error_if_invalid_value(pixelwise_normalization, [True], name="pixelwise_normalization")
+        raise_error_if_invalid_value(box_size, [60], name="box_size")
+        if "oisst" not in data_dir:
+            for name in ["oisstv2-daily", "oisstv2"]:
+                if os.path.isdir(join(data_dir, name)):
+                    data_dir = join(data_dir, name)
+                    break
+        if os.path.isdir(join(data_dir, f"subregion-{box_size}x{box_size}boxes-pixelwise_stats")):
+            data_dir = join(data_dir, f"subregion-{box_size}x{box_size}boxes-pixelwise_stats")
+        super().__init__(data_dir=data_dir, **kwargs)
+        self.save_hyperparameters()
+
+        # --- 수정된 부분: 연도 기반 슬라이스 생성 ---
+        # 날짜 유효성 검사
+        assert train_start_year <= train_end_year, "Train start year must be <= train end year"
+        assert val_start_year <= val_end_year, "Validation start year must be <= val end year"
+        assert test_start_year <= test_end_year, "Test start year must be <= test end year"
+        # 데이터가 겹치거나 순서가 맞는지 확인 (필요시 주석 처리)
+        assert train_end_year < val_start_year, "Training data must come before validation data"
+        assert val_end_year < test_start_year, "Validation data must come before test data"
+
+        log.info(f"Setting up data splits:")
+        log.info(f"  Training:   {train_start_year}-01-01 to {train_end_year}-12-31")
+        log.info(f"  Validation: {val_start_year}-01-01 to {val_end_year}-12-31")
+        log.info(f"  Test:       {test_start_year}-01-01 to {test_end_year}-12-31")
+
+        # YYYY-MM-DD 형식으로 슬라이스 생성
+        self.train_slice = slice(f"{train_start_year}-01-01", f"{train_end_year}-12-31")
+        self.val_slice = slice(f"{val_start_year}-01-01", f"{val_end_year}-12-31")
+        self.test_slice = slice(f"{test_start_year}-01-01", f"{test_end_year}-12-31")
+        # ------------------------------------------
+
+        self.stage_to_slice = {
+            "fit": slice(self.train_slice.start, self.val_slice.stop),
+            "validate": self.val_slice,
+            "test": self.test_slice,
+            "predict": predict_slice,
+            None: None,
+        }
+        log.info(f"Using OISSTv2 data directory: {self.hparams.data_dir}")
+        if save_and_load_as_numpy:
+            self.numpy_dir = join(data_dir, "numpy")
+            os.makedirs(self.numpy_dir, exist_ok=True)  # create the directory if it doesn't exist
         
 
     @property
