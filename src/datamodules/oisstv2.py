@@ -53,36 +53,7 @@ class OISSTv2DataModule(BaseDataModule):
         save_and_load_as_numpy: bool = False,
         **kwargs,
     ):
-        raise_error_if_invalid_type(data_dir, possible_types=[str], name="data_dir")
-        raise_error_if_invalid_value(pixelwise_normalization, [True], name="pixelwise_normalization")
-        raise_error_if_invalid_value(box_size, [60], name="box_size")
-        if "oisst" not in data_dir:
-            for name in ["oisstv2-daily", "oisstv2"]:
-                if os.path.isdir(join(data_dir, name)):
-                    data_dir = join(data_dir, name)
-                    break
-        if os.path.isdir(join(data_dir, f"subregion-{box_size}x{box_size}boxes-pixelwise_stats")):
-            data_dir = join(data_dir, f"subregion-{box_size}x{box_size}boxes-pixelwise_stats")
-        super().__init__(data_dir=data_dir, **kwargs)
-        self.save_hyperparameters()
-        # Set the temporal slices for the train, val, and test sets
-        if isinstance(train_start_date, int):
-            assert 1980 <= train_start_date <= 2018, f"Invalid train_start_date: {train_start_date}"
-            train_start_date = f"{train_start_date}-01-01"
-        self.train_slice = slice(train_start_date, "2018-12-31")
-        self.val_slice = slice("2019-01-01", "2019-12-31")
-        self.test_slice = slice("2020-01-01", "2020-12-31")  # slice("2020-01-01", "2021-12-31")
-        self.stage_to_slice = {
-            "fit": slice(self.train_slice.start, self.val_slice.stop),
-            "validate": self.val_slice,
-            "test": self.test_slice,
-            "predict": predict_slice,
-            None: None,
-        }
-        log.info(f"Using OISSTv2 data directory: {self.hparams.data_dir}")
-        if save_and_load_as_numpy:
-            self.numpy_dir = join(data_dir, "numpy")
-            os.makedirs(self.numpy_dir, exist_ok=True)  # create the directory if it doesn't exist
+        
 
     @property
     def dataset_identifier(self) -> str:
