@@ -1,28 +1,27 @@
 defaults:
   - _self_
-  - _base_data_config.yaml    # general, dataset-independent, parameters
+  - _base_data_config.yaml    # batch_size, num_workers 등 공통 설정
 
-_target_: src.datamodules.oisstv2.OISSTv2DataModule
-# data_dir: "C:/Users/XYZ/data/oisstv2"
-boxes: [88]                     # "all" for all boxes (in data dir), or a list of boxes, e.g. [1, 53, 189]
-validation_boxes: ${datamodule.boxes}      # "all", or a list of boxes, e.g. [1, 53, 189]
+# 1. 위에서 만든 새 파이썬 클래스를 타겟으로 지정
+_target_: src.datamodules.stock_price_datamodule.StockPriceDataModule
 
-# --- 10년 단위 설정 ---
-# 예: 1980년대(81-89) 학습, 1990년대(90-99) 검증, 2000년대(00-09) 테스트
+# 2. CSX.csv 파일 경로 (run.py 기준 상대 경로 또는 절대 경로)
+file_path: "CSX.csv"
+target_column: "Close" # 예측할 열 이름 (대소문자 구분)
+
+# 3. 10년 단위 설정
 train_start_year: 1981
 train_end_year: 1989
-
+  
 val_start_year: 1990
 val_end_year: 1999
-
+  
 test_start_year: 2000
 test_end_year: 2009
-# -------------------------
 
-multi_horizon: False            # use multiple horizons (e.g. 1,2,3,4,5,6,7,8,9,10)
-save_and_load_as_numpy: False   # save and load data as numpy arrays
-prediction_horizon: ${datamodule.horizon}    # prediction horizon (in days), if null, use the default horizon
+# 4. 입력/출력 설정 (모델에 맞게 조정 필요)
+window: 16     # 과거 16일치 데이터를 입력으로 사용
+horizon: 1       # 1일 뒤의 가격을 예측
+multi_horizon: False # 단일 스텝 예측
 
-# Do not change:
-box_size: 60                    # size of the box in degrees (lat, lon)
-pixelwise_normalization: True   # normalize each pixel individually (or based on box-mean mean and std)
+normalize: True  # 정규화 사용 (권장)
