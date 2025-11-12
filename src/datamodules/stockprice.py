@@ -66,16 +66,14 @@ class StockPriceDataModule(BaseDataModule):
     """
     def __init__(
         self,
-        file_path: str,
-        target_column: str = "Close",
+        # --- 수정된 부분: 파일 경로를 직접 받음 ---
+        train_file_path: str,
+        val_file_path: str,
+        test_file_path: str,
+        # ------------------------------------
         
-        # 10년 단위 분할 설정
-        train_start_year: int = 1981,
-        train_end_year: int = 1989,
-        val_start_year: int = 1990,
-        val_end_year: int = 1999,
-        test_start_year: int = 2000,
-        test_end_year: int = 2009,
+        target_column: str = "Close",
+        csv_header_row: int = 2, # CSX.csv 형식(헤더가 3번째 줄)에 맞춘 기본값
         
         # 모델 입력/예측 설정
         window: int = 16,     # 입력으로 사용할 과거 일수
@@ -91,89 +89,88 @@ class StockPriceDataModule(BaseDataModule):
         super().__init__(data_dir=".", **kwargs) 
         # file_path 등 이 클래스 고유의 하이퍼파라미터 저장
         self.save_hyperparameters(
-            "file_path", "target_column",
-            "train_start_year", "train_end_year",
-            "val_start_year", "val_end_year",
-            "test_start_year", "test_end_year",
+            "train_file_path", "val_file_path", "test_file_path",
+            "target_column", "csv_header_row",
             "window", "horizon", "multi_horizon", "normalize"
         )
         
         self.scaler = None # 정규화를 위한 Scaler
 
+    def _load_and_process_series(self, file_path: str) -> pd.Series:
+        """지정된 CSV 파일을 로드하고 타겟 열을 Series로 반환합니다."""
+        try:
+            df = pd.read_csv(file_path, header=self.hparams.csv_header_row)
+        except FileNotFoundError:
+            log.error(f"파일을 찾을 수 없습니다: {file_path}")
+            raise
+        
+        # 날짜(Date) 열 처리
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.set_index("Date").sort_index()
+        
+        # 예측할 타겟 열 선택 (예: 'Close' 종가)
+        return df[self.hparams.target_column].dropna()
+
     def setup(self, stage: Optional[str] = None):
         """
         데이터 로드 및 분할 (train/val/test)
         """
-        try:
-            # 1. CSV 파일 로드 (CSX.csv 형식에 맞게 header=2)
-            df = pd.read_csv(self.hparams.file_path, header=2)
-        except FileNotFoundError:
-            log.error(f"파일을 찾을 수 없습니다: {self.hparams.file_path}")
-            raise
-            
-        # 2. 날짜(Date) 열 처리
-        df["Date"] = pd.to_datetime(df["Date"])
-        df = df.set_index("Date").sort_index()
         
-        # 3. 예측할 타겟 열 선택 (예: 'Close' 종가)
-        series = df[self.hparams.target_column].dropna()
-
-        # 4. 정규화 (Normalization)
-        # 중요: 정규화는 *반드시* 학습 데이터(train) 기준으로 수행해야 함
-        train_data = series.loc[
-            f"{self.hparams.train_start_year}":f"{self.hparams.train_end_year}"
-        ]
+        # 1. 정규화(Normalization) 기준을 위해 *항상* 학습(train) 파일부터 로드
+        log.info(f"Loading train data for normalization stats from: {self.hparams.train_file_path}")
+        train_series = self._load_and_process_series(self.hparams.train_file_path)
         
         if self.hparams.normalize:
             # (X - min) / (max - min) 정규화
-            self.data_min = train_data.min()
-            self.data_max = train_data.max()
+            self.data_min = train_series.min()
+            self.data_max = train_series.max()
             self.data_range = self.data_max - self.data_min
             
-            series = (series - self.data_min) / self.data_range
-            log.info(f"데이터 정규화 완료 (Min: {self.data_min}, Max: {self.data_max})")
-
-        # 5. 10년 단위로 데이터 분할 (남는 데이터는 버려짐)
-        if stage == "fit" or stage is None:
-            train_series = series.loc[
-                f"{self.hparams.train_start_year}":f"{self.hparams.train_end_year}"
-            ]
-            val_series = series.loc[
-                f"{self.hparams.val_start_year}":f"{self.hparams.val_end_year}"
-            ]
+            # 정규화 함수 정의
+            def normalize_func(series):
+                return (series - self.data_min) / self.data_range
             
-            log.info(f"Train data: {len(train_series)} points ({self.hparams.train_start_year}-{self.hparams.train_end_year})")
-            log.info(f"Val data:   {len(val_series)} points ({self.hparams.val_start_year}-{self.hparams.val_end_year})")
+            log.info(f"데이터 정규화 기준 설정 완료 (Min: {self.data_min}, Max: {self.data_max})")
+        else:
+            # 정규화 안 함 (데이터 그대로 사용)
+            def normalize_func(series):
+                return series
 
-            # 6. 슬라이딩 윈도우 샘플 생성
+        # 2. 스테이지에 맞게 데이터 로드 및 처리
+        if stage == "fit" or stage is None:
+            # 학습 데이터
+            train_norm_series = normalize_func(train_series)
             train_samples = create_sliding_window_samples(
-                train_series.values, self.hparams.window, self.hparams.horizon, self.hparams.multi_horizon
+                train_norm_series.values, self.hparams.window, self.hparams.horizon, self.hparams.multi_horizon
             )
-            val_samples = create_sliding_window_samples(
-                val_series.values, self.hparams.window, self.hparams.horizon, self.hparams.multi_horizon
-            )
-
-            # 7. Tensor Dataset으로 변환
             self._data_train = MyTensorDataset(
                 {k: torch.from_numpy(v).float() for k, v in train_samples.items()}, dataset_id='train'
+            )
+            log.info(f"Train data loaded: {len(train_norm_series)} points, {len(self._data_train)} samples.")
+            
+            # 검증 데이터
+            log.info(f"Loading validation data from: {self.hparams.val_file_path}")
+            val_series = self._load_and_process_series(self.hparams.val_file_path)
+            val_norm_series = normalize_func(val_series)
+            val_samples = create_sliding_window_samples(
+                val_norm_series.values, self.hparams.window, self.hparams.horizon, self.hparams.multi_horizon
             )
             self._data_val = MyTensorDataset(
                 {k: torch.from_numpy(v).float() for k, v in val_samples.items()}, dataset_id='val'
             )
+            log.info(f"Validation data loaded: {len(val_norm_series)} points, {len(self._data_val)} samples.")
 
         if stage == "test" or stage is None:
-            test_series = series.loc[
-                f"{self.hparams.test_start_year}":f"{self.hparams.test_end_year}"
-            ]
-            log.info(f"Test data:  {len(test_series)} points ({self.hparams.test_start_year}-{self.hparams.test_end_year})")
-            
+            # 테스트 데이터
+            log.info(f"Loading test data from: {self.hparams.test_file_path}")
+            test_series = self._load_and_process_series(self.hparams.test_file_path)
+            test_norm_series = normalize_func(test_series)
             test_samples = create_sliding_window_samples(
-                test_series.values, self.hparams.window, self.hparams.horizon, self.hparams.multi_horizon
+                test_norm_series.values, self.hparams.window, self.hparams.horizon, self.hparams.multi_horizon
             )
             self._data_test = MyTensorDataset(
                 {k: torch.from_numpy(v).float() for k, v in test_samples.items()}, dataset_id='test'
             )
-
-        # (predict 스테이지는 생략)
+            log.info(f"Test data loaded: {len(test_norm_series)} points, {len(self._data_test)} samples.")
 
         self.print_data_sizes(stage)
